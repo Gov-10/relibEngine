@@ -1,0 +1,9 @@
+_format_version: "3.0"
+_transform: true
+
+# Declarative (DB-less) Kong configuration.
+# Routes for Auth Service, Scenario Generator, Scorecard Service and
+# Regression Tracker will be registered here as those services are
+# implemented in later phases (Task 5.1).
+upstreams: []
+services: []
