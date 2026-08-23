@@ -1,9 +1,311 @@
 _format_version: "3.0"
 _transform: true
 
-# Declarative (DB-less) Kong configuration.
-# Routes for Auth Service, Scenario Generator, Scorecard Service and
-# Regression Tracker will be registered here as those services are
-# implemented in later phases (Task 5.1).
-upstreams: []
-services: []
+# -----------------------------------------------------------------------------
+# Global CORS policy (applies to every proxied route).
+#
+# The Frontend (:3000) is the only browser origin; all its API traffic is
+# cross-origin to Kong (:8000), so responses must carry ACAO headers and
+# preflights must terminate at Kong instead of falling through to backends
+# (FastAPI answers bare OPTIONS with 405).
+#
+# credentials=true matches fetch() credential forwarding; with credentials
+# enabled the origin list stays explicit (no wildcard).
+# -----------------------------------------------------------------------------
+plugins:
+  - name: cors
+    config:
+      origins:
+        - http://localhost:3000
+      methods:
+        - OPTIONS
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+      headers:
+        - Content-Type
+        - Authorization
+        - X-Request-Id
+      credentials: true
+      max_age: 3600
+
+# =============================================================================
+# Relib Engine - API Gateway (Kong, DB-less declarative mode)
+#
+# Sole entry point for the Frontend (ARCHITECTURE.md component #2).
+#
+# Routing model per backend (two services share one upstream):
+#   /api/<name>/healthz   -> <resource>/healthz is NOT prefixed; lands on the
+#                            service root probe /healthz (service.path=/healthz)
+#   /api/<name>/**        -> forwarded to the existing backend API unchanged,
+#                            i.e. the resource prefix is restored
+#                            (service.path=/<resource>, strip_path on the route)
+#
+# Frontend-facing surface (existing backend APIs untouched):
+#   POST /api/auth/**                        -> Auth Service           :8101
+#   POST /api/scenarios/generate             -> Scenario Generator     :8102
+#   GET  /api/scenarios/{scenario_id}        -> Scenario Generator     :8102
+#   GET  /api/scorecards                     -> Scorecard Service      :8103
+#   GET  /api/scorecards/run/{run_id}        -> Scorecard Service      :8103
+#   GET  /api/scorecards/run/{run_id}/latest -> Scorecard Service      :8103
+#   GET  /api/regressions                    -> Regression Tracker     :8104
+#   GET  /api/regressions/agent/{agent}      -> Regression Tracker     :8104
+#   GET  /api/regressions/agent/{agent}/latest                      :8104
+#   GET  /api/regressions/run/{run_id}       -> Regression Tracker     :8104
+#   GET  /api/{auth|scenarios|scorecards|regressions}/healthz -> probes
+#
+# NOTE: Auth Service HTTP layer lands in a later task; until then its target
+# reports unhealthy and /api/auth/** returns 503 by design.
+#
+# Backend services currently run on the host (uvicorn). When containerized
+# onto relib-net, swap each target below for the compose service name.
+#
+# Gateway liveness probes:
+#   GET :8001/status       (Kong Admin status API)
+#   Unmatched :8000 route  -> Kong 404 {"message":"no Route matched ..."}
+# =============================================================================
+
+upstreams:
+  # ---------------------------------------------------------------- Auth ----
+  - name: auth.upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: http
+        http_path: /healthz
+        healthy:
+          interval: 5
+          successes: 2
+          http_statuses: [200, 302]
+        unhealthy:
+          interval: 5
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 3
+          http_statuses: [429, 500, 502, 503, 504]
+      passive:
+        type: http
+        healthy:
+          successes: 2
+        unhealthy:
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 5
+          http_statuses: [429, 500, 502, 503, 504]
+    targets:
+      - target: host.docker.internal:8101
+        weight: 100
+
+  # --------------------------------------------------- Scenario Generator ---
+  - name: scenario-generator.upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: http
+        http_path: /healthz
+        healthy:
+          interval: 5
+          successes: 2
+          http_statuses: [200, 302]
+        unhealthy:
+          interval: 5
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 3
+          http_statuses: [429, 500, 502, 503, 504]
+      passive:
+        type: http
+        healthy:
+          successes: 2
+        unhealthy:
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 5
+          http_statuses: [429, 500, 502, 503, 504]
+    targets:
+      - target: host.docker.internal:8102
+        weight: 100
+
+  # --------------------------------------------------------- Scorecard ------
+  - name: scorecard.upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: http
+        http_path: /healthz
+        healthy:
+          interval: 5
+          successes: 2
+          http_statuses: [200, 302]
+        unhealthy:
+          interval: 5
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 3
+          http_statuses: [429, 500, 502, 503, 504]
+      passive:
+        type: http
+        healthy:
+          successes: 2
+        unhealthy:
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 5
+          http_statuses: [429, 500, 502, 503, 504]
+    targets:
+      - target: host.docker.internal:8103
+        weight: 100
+
+  # ---------------------------------------------------- Regression Tracker --
+  - name: regression-tracker.upstream
+    algorithm: round-robin
+    healthchecks:
+      active:
+        type: http
+        http_path: /healthz
+        healthy:
+          interval: 5
+          successes: 2
+          http_statuses: [200, 302]
+        unhealthy:
+          interval: 5
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 3
+          http_statuses: [429, 500, 502, 503, 504]
+      passive:
+        type: http
+        healthy:
+          successes: 2
+        unhealthy:
+          timeouts: 3
+          tcp_failures: 3
+          http_failures: 5
+          http_statuses: [429, 500, 502, 503, 504]
+    targets:
+      - target: host.docker.internal:8104
+        weight: 100
+
+services:
+  # ============================================================ Auth ========
+  - name: auth-health
+    host: auth.upstream
+    protocol: http
+    port: 80
+    path: /healthz
+    connect_timeout: 2000
+    read_timeout: 5000
+    write_timeout: 5000
+    retries: 2
+    routes:
+      - name: auth-health-route
+        paths: [/api/auth/healthz]
+        strip_path: true
+
+  - name: auth-service
+    host: auth.upstream
+    protocol: http
+    port: 80
+    path: /auth
+    connect_timeout: 2000
+    read_timeout: 10000
+    write_timeout: 5000
+    retries: 3
+    tags: [frontend-entry]
+    routes:
+      - name: auth-route
+        paths: [/api/auth]
+        strip_path: true
+
+  # ============================================== Scenario Generator ========
+  - name: scenario-generator-health
+    host: scenario-generator.upstream
+    protocol: http
+    port: 80
+    path: /healthz
+    connect_timeout: 2000
+    read_timeout: 5000
+    write_timeout: 5000
+    retries: 2
+    routes:
+      - name: scenarios-health-route
+        paths: [/api/scenarios/healthz]
+        strip_path: true
+
+  - name: scenario-generator-service
+    host: scenario-generator.upstream
+    protocol: http
+    port: 80
+    path: /scenarios
+    connect_timeout: 2000
+    # Long read timeout: scenario generation may invoke LLM providers.
+    read_timeout: 60000
+    write_timeout: 10000
+    retries: 2
+    tags: [frontend-entry]
+    routes:
+      - name: scenarios-route
+        paths: [/api/scenarios]
+        strip_path: true
+
+  # ====================================================== Scorecard =========
+  - name: scorecard-health
+    host: scorecard.upstream
+    protocol: http
+    port: 80
+    path: /healthz
+    connect_timeout: 2000
+    read_timeout: 5000
+    write_timeout: 5000
+    retries: 2
+    routes:
+      - name: scorecards-health-route
+        paths: [/api/scorecards/healthz]
+        strip_path: true
+
+  - name: scorecard-service
+    host: scorecard.upstream
+    protocol: http
+    port: 80
+    path: /scorecards
+    connect_timeout: 2000
+    read_timeout: 15000
+    write_timeout: 5000
+    retries: 3
+    tags: [frontend-entry]
+    routes:
+      - name: scorecards-route
+        paths: [/api/scorecards]
+        strip_path: true
+
+  # ================================================= Regression Tracker =====
+  - name: regression-tracker-health
+    host: regression-tracker.upstream
+    protocol: http
+    port: 80
+    path: /healthz
+    connect_timeout: 2000
+    read_timeout: 5000
+    write_timeout: 5000
+    retries: 2
+    routes:
+      - name: regressions-health-route
+        paths: [/api/regressions/healthz]
+        strip_path: true
+
+  - name: regression-tracker-service
+    host: regression-tracker.upstream
+    protocol: http
+    port: 80
+    path: /regressions
+    connect_timeout: 2000
+    read_timeout: 15000
+    write_timeout: 5000
+    retries: 3
+    tags: [frontend-entry]
+    routes:
+      - name: regressions-route
+        paths: [/api/regressions]
+        strip_path: true

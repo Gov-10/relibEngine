@@ -2,12 +2,16 @@ import os
 
 from temporalio import activity
 
+import sandbox
+import trace_capturer
+
 
 INJECT_TRANSIENT_FAILURE_ENV = "INJECT_TRANSIENT_FAILURE_JOB_IDS"
+INJECT_CAPTURE_FAILURE_ENV = "INJECT_CAPTURE_FAILURE_JOB_IDS"
 
 
-def _injection_ids() -> set[str]:
-    raw = os.getenv(INJECT_TRANSIENT_FAILURE_ENV, "")
+def _injection_ids(env_name: str) -> set[str]:
+    raw = os.getenv(env_name, "")
     return {part.strip() for part in raw.split(",") if part.strip()}
 
 
@@ -24,7 +28,7 @@ async def prepare_execution(job: dict) -> dict:
 @activity.defn
 async def execute_in_sandbox(job: dict) -> dict:
     if (
-        job.get("job_id") in _injection_ids()
+        job.get("job_id") in _injection_ids(INJECT_TRANSIENT_FAILURE_ENV)
         and activity.info().attempt
         < int(os.getenv("INJECT_TRANSIENT_FAILURE_MAX_ATTEMPTS", "2"))
     ):
@@ -32,20 +36,24 @@ async def execute_in_sandbox(job: dict) -> dict:
             f"simulated transient sandbox failure "
             f"(attempt {activity.info().attempt} for job {job.get('job_id')})"
         )
-    return {
-        "stage": "executed",
-        "placeholder": True,
-        "sandbox_env": "placeholder-pending-task-3.4",
-        "detail": "no real agent or tool executed (Task 3.3 scope)",
-        "attempt": activity.info().attempt,
-    }
+    result = sandbox.run_in_sandbox(job)
+    result["stage"] = "executed"
+    result["attempt"] = activity.info().attempt
+    return result
 
 
 @activity.defn
-async def capture_trace(job: dict) -> dict:
+async def capture_trace(payload: dict) -> dict:
+    job = payload.get("job") or {}
+    execution = payload.get("execution") or {}
+    report = trace_capturer.capture_trace_execution(
+        job,
+        execution,
+        workflow_id=activity.info().workflow_id,
+        force_failure=job.get("job_id") in _injection_ids(INJECT_CAPTURE_FAILURE_ENV),
+    )
     return {
         "stage": "captured",
-        "placeholder": True,
-        "trace_capturer": "placeholder-pending-task-3.5",
-        "detail": "no real trace streamed to Trace Store yet (Task 3.5 scope)",
+        "capture": report,
+        "attempt": activity.info().attempt,
     }

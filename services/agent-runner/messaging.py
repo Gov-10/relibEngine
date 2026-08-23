@@ -32,6 +32,8 @@ class ScenarioJob(BaseModel):
     prompt_id: int | None = None
     agent_name: str | None = None
     severity: str | None = None
+    scenario_payload: dict | None = None
+    expected_behavior: str | None = None
     produced_at: str | None = None
 
 

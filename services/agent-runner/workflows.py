@@ -7,7 +7,6 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from activities import capture_trace, execute_in_sandbox, prepare_execution
 
-
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=3,
     initial_interval=timedelta(seconds=1),
@@ -34,7 +33,7 @@ class ScenarioExecutionWorkflow:
         )
         captured = await workflow.execute_activity(
             capture_trace,
-            {**job, "execution": executed},
+            {"job": job, "execution": executed},
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=ACTIVITY_RETRY_POLICY,
         )

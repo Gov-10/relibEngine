@@ -130,6 +130,8 @@ def _publish_jobs(agent: Agent, prompt_row: AgentPrompt, created: list[Scenario]
             "prompt_id": prompt_row.id,
             "agent_name": agent.name,
             "severity": scenario.severity,
+            "scenario_payload": scenario.payload,
+            "expected_behavior": scenario.expected_behavior,
             "produced_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
